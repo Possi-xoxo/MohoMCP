@@ -1,174 +1,173 @@
-/**
- * File-based IPC client that communicates with the MOHO Lua server.
- *
- * Protocol:
- * - Bridge writes request to: <ipcDir>/req_<id>.json
- * - MOHO reads the request, processes it, writes: <ipcDir>/resp_<id>.json
- * - MOHO deletes the request file after processing
- * - Bridge reads the response file, then deletes it
- */
-
+/** IPC v2: one exclusively owned mailbox, serialized calls, correlated replies. */
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
 import { parseResponse } from "./protocol.js";
 import { startKeepAlive, stopKeepAlive } from "./keep-alive.js";
 
-// ---------------------------------------------------------------------------
-// MohoClient
-// ---------------------------------------------------------------------------
-
 export class MohoClient {
-  private nextId = 1;
-  private connected = false;
+  private session: string | null = null;
+  private serverId = "";
+  private ready = false;
+  private connecting: Promise<void> | null = null;
+  private closing: Promise<void> | null = null;
+  private queue: Promise<unknown> = Promise.resolve();
+  private ipcDir = "";
+  private generation = 0;
+  private file(name: string): string { return path.join(this.ipcDir, name); }
 
-  // -----------------------------------------------------------------------
-  // Connection lifecycle
-  // -----------------------------------------------------------------------
+  isConnected(): boolean { return this.ready; }
 
-  /**
-   * "Connect" by verifying the IPC directory exists and MOHO's status file
-   * indicates the server is running.
-   */
   async connect(): Promise<void> {
-    if (this.connected) {
-      return;
-    }
+    if (this.closing) await this.closing;
+    if (this.ready) return;
+    if (this.connecting) return this.connecting;
+    // Retire ownership left by a detected server restart before reconnecting.
+    if (this.session) await this.disconnect();
+    if (this.connecting) return this.connecting;
+    this.connecting = this.open(this.generation);
+    try { await this.connecting; } finally { this.connecting = null; }
+  }
 
-    const { ipcDir } = config.moho;
-
-    // Ensure the IPC directory exists
-    try {
-      await fs.promises.mkdir(ipcDir, { recursive: true });
-    } catch {
-      // directory may already exist
-    }
-
-    // Check for MOHO's status file
-    const statusPath = path.join(ipcDir, "status.json");
-    try {
-      const content = await fs.promises.readFile(statusPath, "utf-8");
-      const status = JSON.parse(content);
-      if (!status.running) {
-        throw new Error("MOHO MCP server is not running (status.running=false)");
+  private async open(generation: number): Promise<void> {
+    this.ipcDir = config.moho.ipcDir;
+    await fs.promises.mkdir(this.ipcDir, { recursive: true });
+    let status;
+    try { status = JSON.parse(await fs.promises.readFile(this.file("status.json"), "utf8")); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new Error(`No status file found at ${this.file("status.json")}. Start the MohoMCP server; verify MOHO_MCP_IPC_DIR/TEMP in both processes.`);
       }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new Error(
-          `MOHO MCP server is not running. No status file found at ${statusPath}. ` +
-          "Start the MohoMCP Server from MOHO's Scripts menu first.",
-        );
+      throw error;
+    }
+    if (status.running !== true || status.ipcVersion !== 2 || typeof status.serverId !== "string" || !status.serverId) {
+      throw new Error("MOHO server is stopped or uses incompatible IPC. Install both Pass 2 bridge and plugin (IPC v2).");
+    }
+    if (typeof status.ipcDir === "string") {
+      const normalize = (p: string) => process.platform === "win32" ? path.resolve(p).toLowerCase() : path.resolve(p);
+      if (normalize(status.ipcDir) !== normalize(this.ipcDir)) throw new Error(`IPC directory mismatch: plugin reports ${status.ipcDir}, bridge uses ${this.ipcDir}`);
+    }
+    if (generation !== this.generation) throw new Error("Connection cancelled");
+    const session = randomUUID();
+    let lock;
+    try { lock = await fs.promises.open(this.file("bridge-owner.json"), "wx"); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new Error(`IPC ownership conflict at ${this.ipcDir}. Another bridge owns it, or a crashed bridge left its lock. See IPC recovery instructions; no automatic lock stealing.`);
       }
-      throw err;
+      throw error;
     }
-
-    this.connected = true;
-    startKeepAlive();
-    process.stderr.write(
-      `[moho-mcp] Connected to MOHO via file IPC at ${ipcDir}\n`,
-    );
-  }
-
-  /**
-   * Disconnect — no-op for file IPC but resets state.
-   */
-  disconnect(): void {
-    stopKeepAlive();
-    this.connected = false;
-  }
-
-  /**
-   * Returns whether the client is "connected" (IPC dir verified).
-   */
-  isConnected(): boolean {
-    return this.connected;
-  }
-
-  // -----------------------------------------------------------------------
-  // Request / response
-  // -----------------------------------------------------------------------
-
-  /**
-   * Send a JSON-RPC request to MOHO via file IPC and await the response.
-   */
-  async sendRequest(
-    method: string,
-    params: Record<string, unknown> = {},
-    options?: { timeout?: number },
-  ): Promise<unknown> {
-    if (!this.connected) {
-      throw new Error(
-        "Not connected to MOHO. Is the MOHO application running with the MCP plugin loaded?",
-      );
+    this.session = session;
+    this.serverId = status.serverId;
+    try {
+      try { await lock.writeFile(JSON.stringify({ session, pid: process.pid, startedAt: Date.now() })); }
+      finally { await lock.close(); }
+      if (generation !== this.generation) throw new Error("Connection cancelled");
+      startKeepAlive();
+      // A challenge establishes liveness; status.json alone cannot do so.
+      await this.enqueue("ipc.ping", {}, config.moho.requestTimeout, session);
+      if (this.session !== session) throw new Error("Connection cancelled");
+      this.ready = true;
+    } catch (error) {
+      this.ready = false;
+      if (this.session === session) this.session = null;
+      await this.release(session);
+      throw error;
     }
+  }
 
-    const id = this.nextId++;
-    const { ipcDir, pollInterval, requestTimeout } = config.moho;
-    const timeout = options?.timeout ?? requestTimeout;
+  disconnect(): Promise<void> {
+    if (this.closing) return this.closing;
+    this.ready = false;
+    this.generation++;
+    const session = this.session;
+    this.session = null;
+    this.closing = (async () => {
+      await this.connecting?.catch(() => {});
+      await this.queue.catch(() => {});
+      if (!session) return;
+      await this.release(session);
+    })().finally(() => { this.closing = null; });
+    return this.closing;
+  }
 
-    // Build JSON-RPC request
-    const request = {
-      jsonrpc: "2.0",
-      id,
-      method,
-      params,
+  private async release(session: string): Promise<void> {
+      stopKeepAlive();
+      let owner;
+      try { owner = JSON.parse(await fs.promises.readFile(this.file("bridge-owner.json"), "utf8")); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
+      if (owner.session !== session) return;
+      for (const name of ["request.json", "request.json.tmp", "response.json"]) {
+        await fs.promises.unlink(this.file(name)).catch(error => {
+          if (error.code !== "ENOENT") throw error;
+        });
+      }
+      await fs.promises.unlink(this.file("bridge-owner.json"));
+  }
+
+  async sendRequest(method: string, params: Record<string, unknown> = {}, options?: { timeout?: number }): Promise<unknown> {
+    if (!this.ready || !this.session) throw new Error("Not connected to MOHO");
+    return this.enqueue(method, params, options?.timeout ?? config.moho.requestTimeout, this.session);
+  }
+
+  private enqueue(method: string, params: Record<string, unknown>, timeout: number, session: string): Promise<unknown> {
+    const result = this.queue.then(() => this.exchange(method, params, timeout, session));
+    this.queue = result.catch(() => {});
+    return result;
+  }
+
+  private async exchange(method: string, params: Record<string, unknown>, timeout: number, session: string): Promise<unknown> {
+    const id = randomUUID();
+    const deadline = Date.now() + timeout;
+    const check = async () => {
+      if (this.session !== session) throw new Error("IPC request cancelled by disconnect");
+      let status;
+      try { status = JSON.parse(await fs.promises.readFile(this.file("status.json"), "utf8")); }
+      catch { this.ready = false; throw new Error(`MOHO status missing or invalid at ${this.ipcDir}; server stopped/restarted or IPC directory changed`); }
+      if (status.running !== true || status.serverId !== this.serverId || status.ipcVersion !== 2) {
+        this.ready = false;
+        throw new Error("MOHO server restarted or stopped. Disconnect and reconnect; mutation outcome may be unknown.");
+      }
+      let owner;
+      try { owner = JSON.parse(await fs.promises.readFile(this.file("bridge-owner.json"), "utf8")); }
+      catch { this.ready = false; throw new Error("IPC ownership missing or invalid; disconnect and recover explicitly"); }
+      if (owner.session !== session) { this.ready = false; throw new Error("IPC ownership changed"); }
     };
-
-    const reqFileName = `req_${id}.json`;
-    const respFileName = `resp_${id}.json`;
-    const reqPath = path.join(ipcDir, reqFileName);
-    const respPath = path.join(ipcDir, respFileName);
-
-    // Write request file atomically (write to .tmp then rename)
-    const tmpPath = reqPath + ".tmp";
-    await fs.promises.writeFile(tmpPath, JSON.stringify(request), "utf-8");
-    await fs.promises.rename(tmpPath, reqPath);
-
-    // Poll for response file
-    const startTime = Date.now();
-
-    while (true) {
-      // Check if response file exists
-      try {
-        const content = await fs.promises.readFile(respPath, "utf-8");
-        // Delete response file
-        await fs.promises.unlink(respPath).catch(() => {});
-
-        // Parse and return
-        const response = parseResponse(content);
-
-        if (response.error) {
-          throw new Error(
-            `MOHO error [${response.error.code}]: ${response.error.message}${
-              response.error.data
-                ? ` (${JSON.stringify(response.error.data)})`
-                : ""
-            }`,
-          );
-        }
-
-        return response.result;
-      } catch (err) {
-        // File doesn't exist yet — keep polling
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-          // Check timeout
-          if (Date.now() - startTime > timeout) {
-            // Clean up the request file if it's still there
-            await fs.promises.unlink(reqPath).catch(() => {});
-            throw new Error(
-              `Request ${method} (id=${id}) timed out after ${timeout}ms. ` +
-              "Is the MOHO MCP server running and polling?",
-            );
+    await check();
+    await fs.promises.unlink(this.file("response.json")).catch(error => { if (error.code !== "ENOENT") throw error; });
+    const request = { jsonrpc: "2.0", ipcVersion: 2, serverId: this.serverId, session, id, method, params, expiresAt: deadline };
+    await fs.promises.writeFile(this.file("request.json.tmp"), JSON.stringify(request));
+    await fs.promises.rename(this.file("request.json.tmp"), this.file("request.json"));
+    let validResponse = false;
+    try {
+      while (true) {
+        await check();
+        let raw: string | undefined;
+        try { raw = await fs.promises.readFile(this.file("response.json"), "utf8"); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        if (raw !== undefined) {
+          const envelope = JSON.parse(raw);
+          if (envelope.session !== session || envelope.serverId !== this.serverId || envelope.id !== id || envelope.ipcVersion !== 2) {
+            throw new Error("Mismatched IPC response ID, session, or server instance; response rejected");
           }
-
-          // Wait before next poll
-          await new Promise((resolve) => setTimeout(resolve, pollInterval));
-          continue;
+          const response = parseResponse(raw);
+          const hasResult = Object.hasOwn(envelope, "result");
+          const hasError = Object.hasOwn(envelope, "error");
+          if (hasResult === hasError || (hasError && (!response.error || typeof response.error.code !== "number" || typeof response.error.message !== "string"))) {
+            throw new Error("Invalid IPC response result/error envelope");
+          }
+          validResponse = true;
+          if (response.error) throw new Error(`MOHO error [${response.error.code}]: ${response.error.message}`);
+          return response.result;
         }
-
-        // Re-throw non-ENOENT errors (parse errors, MOHO errors, etc.)
-        throw err;
+        if (Date.now() >= deadline) throw new Error(`Request ${method} timed out after ${timeout}ms at ${this.ipcDir}. Server status may be stale or polling stopped. Outcome unknown; do not retry writes automatically.`);
+        await new Promise(resolve => setTimeout(resolve, config.moho.pollInterval));
       }
+    } finally {
+      if (!validResponse) this.ready = false;
+      await fs.promises.unlink(this.file("request.json")).catch(() => {});
+      await fs.promises.unlink(this.file("response.json")).catch(() => {});
     }
   }
 }

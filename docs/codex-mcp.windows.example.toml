@@ -1,0 +1,23 @@
+# EXAMPLE ONLY. This file is not loaded automatically.
+# Replace C:/path/to/MohoMCP with the permanent checkout path.
+# Manually merge into your chosen Codex config only when ready for Pass 3.
+# Official format: https://learn.chatgpt.com/docs/extend/mcp?surface=cli
+[mcp_servers.moho-mcp]
+command = 'C:/Program Files/nodejs/node.exe'
+args = ['C:/path/to/MohoMCP/bridge/dist/index.js']
+cwd = 'C:/path/to/MohoMCP/bridge'
+enabled = false
+startup_timeout_sec = 20
+tool_timeout_sec = 60
+# Initial integration exposes only queries; batch_execute could bypass this
+# restriction by calling write methods, so it is deliberately absent.
+enabled_tools = [
+  'document_getInfo', 'document_getLayers',
+  'layer_getProperties', 'layer_getChildren', 'layer_getBones',
+  'bone_getProperties', 'animation_getKeyframes', 'animation_getFrameState',
+  'mesh_getPoints', 'mesh_getShapes'
+]
+# Optional: pre-create this directory and give Moho the SAME environment value
+# before launching it. This table only changes the bridge environment.
+# [mcp_servers.moho-mcp.env]
+# MOHO_MCP_IPC_DIR = 'C:/path/to/private/moho-mcp'

@@ -275,7 +275,8 @@ function animation.getFrameState(moho, params)
 
     -- Visibility (layer-level, not channel-based in most cases)
     local visOk, vis = pcall(function() return lyr:IsVisible() end)
-    result.visible = visOk and (vis == true) or true
+    result.visible = true
+    if visOk then result.visible = (vis == true) end
 
     return result
 end

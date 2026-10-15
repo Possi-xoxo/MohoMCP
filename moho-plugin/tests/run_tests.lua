@@ -140,6 +140,11 @@ dofile(this_dir .. "test_protocol.lua")
 section("validator.lua tests")
 dofile(this_dir .. "test_validator.lua")
 
+section("server.lua regression tests")
+dofile(this_dir .. "test_server.lua")
+section("animation.lua regression tests")
+dofile(this_dir .. "test_animation.lua")
+
 -------------------------------------------------------------------------------
 -- Summary
 -------------------------------------------------------------------------------

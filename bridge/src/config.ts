@@ -1,8 +1,13 @@
 import path from "node:path";
 import os from "node:os";
 
-const defaultIpcDir = process.env.MOHO_MCP_IPC_DIR ||
-  path.join(os.tmpdir(), "moho-mcp");
+const tempRoot = process.platform === "win32"
+  ? (process.env.TEMP || process.env.TMP || os.tmpdir())
+  : (process.env.TMPDIR || "/tmp");
+const defaultIpcDir = process.env.MOHO_MCP_IPC_DIR || path.join(tempRoot, "moho-mcp");
+if (!path.isAbsolute(defaultIpcDir)) {
+  throw new Error("MOHO_MCP_IPC_DIR must be an absolute path shared with the Moho plugin");
+}
 
 export const config = {
   moho: {

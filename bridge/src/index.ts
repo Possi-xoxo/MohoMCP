@@ -4,10 +4,10 @@
  * MohoMCP Bridge Server
  *
  * Entry point for the MCP server that bridges MCP clients (Claude Desktop,
- * Claude Code) to a MOHO Lua TCP server running on localhost.
+ * Claude Code, Codex) to a MOHO Lua file-IPC server.
  *
  * Communication flow:
- *   MCP Client <--stdio--> This Bridge <--TCP/JSON-RPC--> MOHO Lua Plugin
+ *   MCP Client <--stdio--> This Bridge <--file JSON-RPC--> MOHO Lua Plugin
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -71,7 +71,7 @@ async function main(): Promise<void> {
     },
   );
 
-  // Create the MOHO TCP client (connection is lazy — established on first tool call)
+  // Create the file IPC client (connection is lazy — established on first tool call)
   const mohoClient = new MohoClient();
 
   // Register all MOHO tools on the MCP server
@@ -90,15 +90,24 @@ async function main(): Promise<void> {
   // Graceful shutdown
   // -----------------------------------------------------------------------
 
-  const shutdown = (): void => {
+  let shuttingDown = false;
+  const shutdown = async (): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     process.stderr.write("[moho-mcp] Shutting down...\n");
-    mohoClient.disconnect();
-    process.exit(0);
+    try {
+      await mohoClient.disconnect();
+      process.exit(0);
+    } catch (error) {
+      process.stderr.write(`[moho-mcp] IPC cleanup failed; explicit recovery may be needed: ${String(error)}\n`);
+      process.exit(1);
+    }
   };
 
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
   process.on("SIGHUP", shutdown);
+  process.stdin.on("end", shutdown);
 }
 
 // ---------------------------------------------------------------------------
