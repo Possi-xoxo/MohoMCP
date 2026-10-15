@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { installLifecycle } from "./lifecycle.js";
 
 /**
  * MohoMCP Bridge Server
@@ -34,39 +35,11 @@ async function main(): Promise<void> {
     },
     {
       instructions: [
-        "MohoMCP controls Moho animation software via file-based IPC. Each individual tool call incurs ~200-400ms of IPC overhead (polling latency).",
-        "",
-        "## CRITICAL: Use batch_execute to minimize latency",
-        "",
-        "Always use the batch_execute tool when you need 2 or more operations. A batch of N operations completes in a single IPC round-trip (~300ms total), whereas N individual calls take ~300ms × N.",
-        "",
-        "### When to batch (ALWAYS prefer this)",
-        "- Setting bone transforms across multiple frames or multiple bones",
-        "- Reading several layer/bone properties at once",
-        "- Setting keyframes and then setting their interpolation modes",
-        "- Any sequence of document.setFrame, bone.setTransform, animation.setKeyframe, etc.",
-        "- Mixed read+write sequences where reads don't gate later operations",
-        "",
-        "### When to use individual calls",
-        "- You need to read a result BEFORE deciding the next operation (data-dependent branching)",
-        "- Using document_screenshot (not allowed in batches — too heavyweight)",
-        "- A single standalone operation",
-        "",
-        "### Batch method names use dot notation",
-        'Inside batch_execute operations, method names use dots (e.g. "bone.setTransform", "layer.getProperties"), NOT underscores. The params match each tool\'s parameter schema exactly.',
-        "",
-        "### Example: Animate a bone wave across 5 frames",
-        "Instead of 5 separate bone_setTransform calls, use ONE batch_execute:",
-        '{',
-        '  "operations": [',
-        '    { "method": "bone.setTransform", "params": { "layerId": 1, "boneId": 0, "frame": 1, "angle": 0.1 } },',
-        '    { "method": "bone.setTransform", "params": { "layerId": 1, "boneId": 0, "frame": 5, "angle": 0.3 } },',
-        '    { "method": "bone.setTransform", "params": { "layerId": 1, "boneId": 0, "frame": 10, "angle": -0.1 } },',
-        '    { "method": "bone.setTransform", "params": { "layerId": 1, "boneId": 0, "frame": 15, "angle": -0.3 } },',
-        '    { "method": "bone.setTransform", "params": { "layerId": 1, "boneId": 0, "frame": 20, "angle": 0.0 } }',
-        '  ]',
-        '}',
-        "This takes ~300ms instead of ~1500ms.",
+        "MohoMCP communicates with Moho using private file IPC. Inspect the active document and rig before writing.",
+        "Respect the enabled tool filter. Do not enable unrestricted batch, screenshot, or input tools for convenience.",
+        "bone_setTransform is angle-only in the validated workflow. A local session-bound approval is required.",
+        "Version 2 approvals allow one inspected edit; version 3 explicitly approves a bounded same-layer two-bone transaction triggered by its first operation. Never infer transaction scope from the anchor call alone.",
+        "Read back changes. Do not retry a timed-out mutation without inspecting the document. No automatic save.",
       ].join("\n"),
     },
   );
@@ -80,34 +53,20 @@ async function main(): Promise<void> {
   // Register static knowledge resources (shortcuts, tools reference)
   registerResources(server);
 
-  // Wire up stdio transport (stdin/stdout for MCP protocol, stderr for logging)
+  const shutdown = installLifecycle(async () => {
+    await mohoClient.disconnect();
+    await server.close();
+  });
   const transport = new StdioServerTransport();
-  await server.connect(transport);
+  // MCP's protocol layer owns transport.onclose; use its public close hook.
+  server.server.onclose = () => { void shutdown("MCP transport closed"); };
+  try {
+    await server.connect(transport);
+    process.stderr.write("[moho-mcp] MCP server running on stdio transport\n");
+  } catch (error) {
+    await shutdown(`transport startup failed: ${String(error)}`, 1);
+  }
 
-  process.stderr.write("[moho-mcp] MCP server running on stdio transport\n");
-
-  // -----------------------------------------------------------------------
-  // Graceful shutdown
-  // -----------------------------------------------------------------------
-
-  let shuttingDown = false;
-  const shutdown = async (): Promise<void> => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    process.stderr.write("[moho-mcp] Shutting down...\n");
-    try {
-      await mohoClient.disconnect();
-      process.exit(0);
-    } catch (error) {
-      process.stderr.write(`[moho-mcp] IPC cleanup failed; explicit recovery may be needed: ${String(error)}\n`);
-      process.exit(1);
-    }
-  };
-
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-  process.on("SIGHUP", shutdown);
-  process.stdin.on("end", shutdown);
 }
 
 // ---------------------------------------------------------------------------

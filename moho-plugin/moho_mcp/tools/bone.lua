@@ -4,6 +4,9 @@
 -- a result table on success, or nil + errorMessage on failure.
 
 local bone = {}
+local safe = require("moho_mcp.safe_write")
+local iterative = require("moho_mcp.iterative_write")
+local coordinated = require("moho_mcp.coordinated_write")
 
 --- Safely retrieve a layer by its absolute ID.
 -- @param moho  The global ScriptInterface object
@@ -15,7 +18,7 @@ local function getLayerById(moho, layerId)
         return nil, "No active document"
     end
 
-    if type(layerId) ~= "number" then
+    if not safe.integer(layerId) then
         return nil, "layerId must be a number"
     end
 
@@ -73,7 +76,7 @@ local function getBone(moho, layerId, boneId)
     end
 
     -- Validate bone index
-    if type(boneId) ~= "number" then
+    if not safe.integer(boneId) then
         return nil, nil, "boneId must be a number"
     end
 
@@ -180,7 +183,7 @@ function bone.getProperties(moho, params)
 
     -- Animated values at current frame
     local frame = 0
-    pcall(function() frame = moho.document:CurrentFrame() end)
+    if safe.integer(moho.frame) then frame = moho.frame else result.animatedError = "Current frame unavailable" end
 
     local animated = {}
 
@@ -206,100 +209,46 @@ function bone.getProperties(moho, params)
         animated.scale = animScale
     end
 
-    if next(animated) ~= nil then
+    if not result.animatedError and next(animated) ~= nil then
         result.animated = animated
     end
 
+    -- Explicit channel readback for the first-write review; no timeline movement.
+    local keysOK, keys = pcall(function()
+        local ch = b.fAnimAngle
+        local count = ch:CountKeys()
+        if not safe.integer(count) or count > 4096 then error("Invalid/excessive angle key count") end
+        local entries = {}
+        for i = 0, count - 1 do
+            local when = ch:GetKeyWhen(i)
+            local value = ch:GetValue(when)
+            if not safe.integer(when) or not safe.finite(value) then error("Invalid angle key") end
+            entries[#entries + 1] = {frame=when,angle=value}
+        end
+        return entries
+    end)
+    if keysOK then result.angleKeyframes = keys else result.angleKeyframesError = tostring(keys) end
+    local inspectOK, inspection = pcall(iterative.inspect, moho, params, getLayerById(moho, params.layerId), b, skel)
+    if inspectOK then result.editInspection = inspection else result.editInspectionError = tostring(inspection) end
+    local rigOK, rig = pcall(coordinated.inspect, moho, params, getLayerById(moho, params.layerId), skel)
+    if rigOK then result.rigInspection = rig else result.rigInspectionError = tostring(rig) end
     return result
 end
 
---- Set the transform (angle, position, scale) of a bone at a specific frame.
--- Creates a keyframe automatically. All transform parameters are optional;
--- only supplied values are applied.
--- @param moho  The global ScriptInterface object
--- @param params table  Must contain layerId, boneId, frame; optionally angle, posX, posY, scale
--- @return table|nil  Confirmation on success
--- @return string|nil  An error message on failure
+--- First-write mode: one explicitly approved angle key on a disposable rig.
+-- Existing public schema is retained, but compound/position/scale writes fail
+-- closed until their channels and rollback behavior are separately validated.
 function bone.setTransform(moho, params)
-    if not params then
-        return nil, "Missing parameters"
-    end
-    if params.layerId == nil then
-        return nil, "Missing required parameter: layerId"
-    end
-    if params.boneId == nil then
-        return nil, "Missing required parameter: boneId"
-    end
-    if params.frame == nil then
-        return nil, "Missing required parameter: frame"
-    end
-
+    local valid, validationError = safe.validate(params)
+    if not valid then return nil, validationError end
     local b, skel, err = getBone(moho, params.layerId, params.boneId)
-    if not b then
-        return nil, err
-    end
-
-    local frame = params.frame
-
-    -- Get the layer for PrepUndo
-    local lyr = getLayerById(moho, params.layerId)
-    moho.document:PrepUndo(lyr)
-
-    local changed = {}
-
-    -- Angle (radians)
-    if params.angle ~= nil then
-        local ok, setErr = pcall(function()
-            b.fAnimAngle:SetValue(frame, params.angle)
-        end)
-        if ok then
-            changed.angle = params.angle
-        else
-            return nil, "Failed to set angle: " .. tostring(setErr)
-        end
-    end
-
-    -- Position
-    if params.posX ~= nil or params.posY ~= nil then
-        local ok, setErr = pcall(function()
-            -- Get current position to preserve unchanged axis
-            local cur = b.fAnimPos:GetValue(frame)
-            local newX = params.posX or cur.x
-            local newY = params.posY or cur.y
-            local vec = LM.Vector2:new_local()
-            vec.x = newX
-            vec.y = newY
-            b.fAnimPos:SetValue(frame, vec)
-        end)
-        if ok then
-            changed.posX = params.posX
-            changed.posY = params.posY
-        else
-            return nil, "Failed to set position: " .. tostring(setErr)
-        end
-    end
-
-    -- Scale
-    if params.scale ~= nil then
-        local ok, setErr = pcall(function()
-            b.fAnimScale:SetValue(frame, params.scale)
-        end)
-        if ok then
-            changed.scale = params.scale
-        else
-            return nil, "Failed to set scale: " .. tostring(setErr)
-        end
-    end
-
-    moho.document:SetDirty()
-
-    return {
-        success = true,
-        layerId = params.layerId,
-        boneId  = params.boneId,
-        frame   = frame,
-        changed = changed,
-    }
+    if not b then return nil, err end
+    local layer = getLayerById(moho, params.layerId)
+    local handled, result, editError = coordinated.tryApply(moho, params, layer, skel)
+    if handled then return result, editError end
+    handled, result, editError = iterative.tryApply(moho, params, layer, b, skel)
+    if handled then return result, editError end
+    return safe.setAngle(moho, params, layer, b)
 end
 
 --- Select a bone in the UI.

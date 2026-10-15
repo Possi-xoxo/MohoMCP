@@ -7,7 +7,9 @@ Codex MCP stdio → Node MohoClient → local JSON mailbox → Lua poll callback
 | File | Writer | Purpose |
 |---|---|---|
 | status.json | Lua | running, ipcVersion=2, serverId, ipcDir |
-| bridge-owner.json | Node, exclusive create | session UUID, PID, start time; one client per directory |
+| bridge-owner.json | Node, exclusive create | session UUID, server epoch, PID, OS birth identity, executable, host; one client per directory |
+| owner-session-UUID.json | Node, immutable receipt | exact matching owner record; required for automatic recovery |
+| ownership-transition/ | Node, exclusive mkdir | serializes ownership publication, recovery and release |
 | request.json | Node | JSON-RPC request plus session, serverId, ipcVersion, expiresAt |
 | response.json | Lua | JSON-RPC result/error plus matching id, session, serverId, ipcVersion |
 
@@ -28,12 +30,12 @@ This cache is in memory and only covers the current mailbox. It is not a durable
 | Malformed response / timeout | Request fails, connection becomes unready; reconnect explicitly |
 | Response write/serialization failure | Lua retains cached response/fallback; mutation does not repeat in that instance |
 | Graceful bridge shutdown | Cancels/drains queued work and removes owned mailbox/lock |
-| Bridge crash | Lock remains; second client fails clearly; manual recovery required |
+| Bridge crash | On Windows, complete verifiable dead-owner state can be recovered; ambiguous state requires manual recovery |
 | Lua restart | New epoch; old requests rejected; client detects changed status and reconnects |
 | Stale status / stopped polling | Ping or subsequent request times out; no continuous heartbeat |
 | Another Lua server replaces status | Prior server stops on its next poll; require one Moho instance, not distributed locking |
 
-Owner locks are not stolen based on PID or age. This sacrifices automatic crash recovery to avoid conflicting live clients and PID-reuse races. Follow the Windows guide's stop-both-sides cleanup procedure. Never infer a failed mutation did not execute.
+Owner locks are never removed based on PID absence or age alone. Pass 3.1 requires a complete versioned owner record, exact immutable session receipt, matching host/platform, valid OS birth identity/executable, two successful absent-process checks, and matching session/server metadata for every existing mailbox file. Any live PID is protected, even if its birth identity differs (PID reuse). Inspection errors fail closed. An exclusive transition directory serializes competing new bridges. Follow the Windows guide for ambiguous or legacy state. Never infer a failed mutation did not execute.
 
 ## Configuration and compatibility
 
@@ -42,3 +44,15 @@ Both sides honor absolute `MOHO_MCP_IPC_DIR`. Windows defaults use TEMP then TMP
 IPC v2 deliberately requires a paired bridge/plugin upgrade. The old `req_N.json` / `res_N.json` protocol is not read or emitted. A new bridge rejects legacy status; an old bridge may time out against the new plugin. Tool-level compatibility is preserved, filesystem-protocol compatibility is not. Do not run both versions in one directory.
 
 Session tokens are correlation data, not authentication against processes able to read/write the directory. No ACL, symlink/reparse-point confinement, multi-user isolation, or hostile-process protection has been added. Production keep-alive remains unchanged; tests disable it. Polling overhead is bounded but live UI responsiveness, Moho's embedded Lua environment, rename behavior under antivirus contention, and API compatibility still require Pass 3 validation.
+
+## Pass 3.1 lifecycle details
+
+Shutdown listeners are installed before MCP transport startup. stdin end/close/error, stdout error, signals, parent disconnect, transport close, and event-loop drain funnel through one idempotent cleanup. Cleanup cancels queued/in-flight client work, stops the existing helper, releases ownership, and closes MCP. A five-second bound prevents indefinite shutdown hangs. stderr identifies the shutdown reason and incomplete cleanup; stdout remains MCP-only.
+
+Windows forced process termination can bypass JavaScript handlers. Automatic recovery is a restart fallback, not a promise that an exiting process always cleans up. Windows PowerShell process inspection uses a validated numeric PID in fixed code, no owner-controlled shell text, a five-second timeout, and no UI/input APIs. It runs at connect/recovery only, not per request. Process StartTime UTC ticks and executable path are stored with the session. A live process is never killed or displaced, including a reused PID. Unknown/access-denied identity is not absence. Other platforms retain exclusive ownership and graceful cleanup but do not automatically recover old locks.
+
+The owner receipt is written before the owner file. Recovery requires exact receipt/owner bytes and matching session/server fields in pending request/response files (including temporary files). It discards abandoned mailbox data, never replays it, and creates a fresh session. The ping then proves current Lua liveness. Correlation still rejects late old Lua replies. The receipt is a consistency witness, not authentication against another process with directory write access.
+
+All Pass 3.1 ownership operations hold `ownership-transition/`. A process killed in this short critical section can leave the guard behind: contenders wait up to two seconds, then fail explicitly. The guard is NEVER stolen automatically. Similarly, torn JSON, mixed-session mailbox data, missing receipts, legacy records, an active reused PID, or failed OS inspection require manual recovery. These deliberate limits avoid racing a delayed publisher/cleaner. A killed process before publication may leave an unused receipt; it cannot satisfy a later different UUID session.
+
+Do not mix bridge versions in the same directory. Lua IPC v2 envelopes are unchanged and the existing Pass 2 Lua server accepts the additional owner metadata. Old bridges do not understand receipts or the transition guard. Stop all bridges before upgrading; legacy locks require the documented one-time manual recovery. No new dependencies, public tool names, input schemas, or networking were introduced.

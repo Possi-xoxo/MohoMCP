@@ -4,6 +4,12 @@ import path from "node:path";
 import os from "node:os";
 import { MohoClient } from "../moho-client.js";
 vi.mock("../keep-alive.js", () => ({ startKeepAlive: vi.fn(), stopKeepAlive: vi.fn() }));
+vi.mock("../ownership.js", async importOriginal => {
+  const actual = await importOriginal<typeof import("../ownership.js")>();
+  return { ...actual, Ownership: class extends actual.Ownership {
+    constructor(dir: string) { super(dir, async () => ({birth:"123", executable:process.execPath})); }
+  }};
+});
 let dir = "";
 vi.mock("../config.js", () => ({ config: { moho: {
   get ipcDir() { return dir; }, pollInterval: 2, requestTimeout: 150,

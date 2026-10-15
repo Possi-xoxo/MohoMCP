@@ -1,14 +1,14 @@
 # Windows / Moho Pro 14.5 / Codex setup
 
-This guide prepares the Possi-xoxo/MohoMCP fork audited at commit
-`d592a572d80d0de292b2b9c5866bdd0f058f8fd4`. No live Moho 14.5 connection was tested.
-The audit checkout is at
-`C:\Users\Blake\Documents\Codex\2026-10-14\mohomcp-implementation-pass-1-repository-audit\work\MohoMCP`.
-Keep it or move/copy it to a permanent location before configuring Codex.
+This guide covers the Possi-xoxo/MohoMCP fork. Passes 3–6 verified live reading,
+bone-angle editing, coordinated two-bone animation, and manual Undo on a disposable
+Moho Pro 14.5 project. See [Pass 6 results](implementation-pass-6.md) for scope and limitations.
+Choose a permanent local checkout location before configuring Codex; substitute
+your own absolute paths in the example configuration.
 
 ## 1. Prerequisites
 
-- Windows 10/11 and a licensed Moho Pro 14.5 installation. Verify the exact version and installation location manually; neither was established in this pass.
+- Windows 10/11 and a licensed Moho Pro 14.5 installation. Verify your exact version and installation location manually.
 - Native Windows Node.js and npm. Node 24.14.0/npm 11.9.0 were tested. Although package.json says Node >=18, the locked Vite requires `^20.19.0 || >=22.12.0`; use the tested Node 24 environment for this checkout.
 - Codex running locally on the same Windows computer and user account as Moho. WSL/Linux Node will choose unsupported input/capture backends and a different temp directory.
 - Windows PowerShell (`powershell.exe`), .NET `Add-Type`, `System.Drawing`, and `user32.dll`. These support keep-alive, capture and input. PowerShell restrictions can block them. No Python, separate Lua, LuaSocket, Visual Studio compiler, or external automation package is required by the bridge itself. Standalone Lua 5.4 is useful only for tests.
@@ -54,6 +54,7 @@ Menu/MohoMCP/
     server.lua
     protocol.lua
     validator.lua
+    safe_write.lua
     tools/
       document.lua
       layer.lua
@@ -115,14 +116,14 @@ The example exposes ten query tools and omits batch, writes, input and screensho
 1. If using the CLI, `codex mcp list` confirms registration; `/mcp` shows active connections in the Codex TUI. Registration alone is insufficient.
 2. Ask Codex to call `document_getInfo` and `document_getLayers` only. Compare the returned name, dimensions, FPS, current frame and layer names against the disposable document manually. Fallback zero/default values are not proof of API compatibility.
 3. Query a discovered layer ID and bone ID. Do not guess IDs. Capture the request, result, script-console diagnostics and exact Moho version.
-4. Run 200 sequential read calls, including calls 101–103, and compare results. Pass 2 simulated these successfully, but Moho polling still needs live validation. Disconnect and reconnect the bridge, then restart the Lua server and verify explicit reconnect. Do not blindly retry timed-out writes: timeout does not cancel a handler already executing.
+4. Run 200 sequential read calls, including calls 101â€“103, and compare results. Pass 2 simulated these successfully, but Moho polling still needs live validation. Disconnect and reconnect the bridge, then restart the Lua server and verify explicit reconnect. Do not blindly retry timed-out writes: timeout does not cancel a handler already executing.
 5. Test nested-group access, hidden-layer reporting, channel types, interpolation signatures and undo on disposable content before expanding the tool filter. Width/height overrides for scene screenshots are currently ineffective. Input/capture require their own explicit later test.
 
 If no status file appears, check plugin loading and the two temp paths. If requests time out, inspect polling/tool selection, PowerShell availability, script errors and request IDs. If a response returns but contains defaults, verify the relevant 14.5 API accessor. To stop, disconnect the Codex bridge, toggle the Moho server off, and close the disposable document without saving unwanted changes.
 
 ## 7. Ownership conflicts and crash recovery
 
-A second bridge is rejected while `bridge-owner.json` exists. Graceful disconnect releases it; a killed/crashed bridge can leave it behind. Locks are intentionally never stolen automatically, including apparently dead PIDs.
+A second bridge is rejected while `bridge-owner.json` exists. Graceful disconnect releases it; a killed/crashed bridge can leave it behind. Pass 3.1 can recover a complete verified Windows dead-owner session automatically. It never steals from a live PID, and never relies on PID absence alone. Legacy, incomplete, mixed-session or uninspectable ownership still requires manual recovery.
 
 1. Disconnect Codex's MCP server and stop any standalone bridge. Stop the Moho-side server; closing Moho is safest if its state is uncertain. Confirm no bridge or Lua server still uses this directory. A PID in the owner file is diagnostic, not proof of safety because PIDs can be reused.
 2. Inspect the disposable document before retrying any mutation whose result was lost. Save only if you intentionally want those changes.
@@ -130,3 +131,23 @@ A second bridge is rejected while `bridge-owner.json` exists. Graceful disconnec
 4. Restart the Lua server, then reconnect Codex. The new ping must succeed. If the server epoch changes during a request, reconnect explicitly; the bridge never replays the interrupted operation automatically.
 
 See [IPC v2 architecture](ipc-v2.md) and [Pass 2 results](implementation-pass-2-summary.md). Screenshots, input automation, mutation validation, and dependency advisories remain blockers to broader use.
+
+## Pass 3.1 restart preparation
+
+Use a launcher started manually from the desktop, with an explicitly inherited `MOHO_MCP_IPC_DIR`. Verify from both the desktop terminal and Codex that the launcher and IPC directory are visible. In the first live test, AppData paths visible inside Codex were not visible on the desktop; a shared Documents location resolved that mismatch. Do not assume equal path strings imply shared storage. Keep the IPC directory outside the Git checkout and restrict it to the current user, SYSTEM and Administrators. No ACL changes are required by the new bridge code.
+
+Build the updated bridge, but do not replace a running bridge's files during a live test. Close/disconnect old bridges before activating the new build. Existing IPC v2 Lua server files remain protocol-compatible; the optional layer-count correction is in `moho_mcp/tools/document.lua` and needs a backed-up manual plugin update plus Moho restart before live validation. This implementation pass did not install it.
+
+When the host closes stdin normally, the new bridge cleans up its lock and receipt. If the host forcibly terminates it, the next bridge can recover a valid dead-owner session after OS and mailbox checks. Never automatically retry a timed-out mutation; its outcome may still be unknown.
+
+If recovery reports an interrupted transition, first stop all bridge processes and the Lua server. After verifying the exact directory and obtaining approval, archive the relevant state, remove only the known owner/mailbox files and the matching `owner-session-<UUID>.json`; remove `ownership-transition` only if it is empty and no ownership transition can still be running. Do not recursively delete the IPC directory. Investigate access-denied process queries rather than treating them as proof of death. Mixed or malformed records require the same explicit recovery.
+
+Before the next live run, obtain approval, install any Lua changes with backups, and start Moho from the desktop launcher. Verify the displayed shared IPC directory, use a disposable document, and enable only the ten queries. Confirm metadata/layer counts, run 200 reads on the final shared path, close/reopen Codex normally, and check a fresh session while Moho stays open. Actual Codex app termination behavior still needs this controlled repeat; simulated process tests are not a live certification.
+
+## Pass 5 iterative edits
+
+See [implementation-pass-5.md](implementation-pass-5.md) for exact single-edit approvals and the controlled test. Install `moho_mcp/iterative_write.lua` alongside the matching `moho_mcp/tools/bone.lua` after backing up existing files and receiving approval. One normal Moho restart loads this code; no restart is needed between subsequent angle edits. Generic script hot reload is not verified safe for the retained server/callbacks. Keep the existing private IPC path, exclusive ownership, shared launcher and eleven-tool filter. No additional tools or background processes are required. Do not use the legacy installers for this upgrade.
+
+## Pass 6 coordinated edits
+
+See [implementation-pass-6.md](implementation-pass-6.md). The narrow two-bone transaction requires matching `moho_mcp/coordinated_write.lua` and `moho_mcp/tools/bone.lua`, installed with approval and backups followed by one normal Moho restart. Keep the existing tool filter; unrestricted batch is unnecessary. Version-3 approval files are private ephemeral runtime files and must never be committed. Live write approval is separate from plugin installation approval.

@@ -142,6 +142,12 @@ dofile(this_dir .. "test_validator.lua")
 
 section("server.lua regression tests")
 dofile(this_dir .. "test_server.lua")
+section("document.lua regression tests")
+dofile(this_dir .. "test_document.lua")
+section("first-write safety regression tests")
+dofile(this_dir .. "test_safe_write.lua")
+dofile(this_dir .. "test_iterative_write.lua")
+dofile(this_dir .. "test_coordinated_write.lua")
 section("animation.lua regression tests")
 dofile(this_dir .. "test_animation.lua")
 

@@ -132,8 +132,18 @@ function document.getInfo(moho, params)
     end
 
     -- Layer count summary
-    local tlOk, tl = pcall(function() return doc:TotalLayerCount() end)
-    result.totalLayers = tlOk and tl or 0
+    -- Reuse the same hierarchy traversal as document.getLayers rather than
+    -- silently returning zero from the unavailable TotalLayerCount accessor.
+    local layers, layerError = document.getLayers(moho, {})
+    if not layers then return nil, layerError end
+    local function countTree(entries)
+        local total = 0
+        for _, entry in ipairs(entries) do
+            total = total + 1 + countTree(entry.children or {})
+        end
+        return total
+    end
+    result.totalLayers = countTree(layers)
 
     local clOk, cl = pcall(function() return doc:CountLayers() end)
     result.topLevelLayers = clOk and cl or 0

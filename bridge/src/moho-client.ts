@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
+import { Ownership } from "./ownership.js";
 import { parseResponse } from "./protocol.js";
 import { startKeepAlive, stopKeepAlive } from "./keep-alive.js";
 
@@ -50,19 +51,10 @@ export class MohoClient {
     }
     if (generation !== this.generation) throw new Error("Connection cancelled");
     const session = randomUUID();
-    let lock;
-    try { lock = await fs.promises.open(this.file("bridge-owner.json"), "wx"); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new Error(`IPC ownership conflict at ${this.ipcDir}. Another bridge owns it, or a crashed bridge left its lock. See IPC recovery instructions; no automatic lock stealing.`);
-      }
-      throw error;
-    }
+    await new Ownership(this.ipcDir).acquire(session, status.serverId);
     this.session = session;
     this.serverId = status.serverId;
     try {
-      try { await lock.writeFile(JSON.stringify({ session, pid: process.pid, startedAt: Date.now() })); }
-      finally { await lock.close(); }
       if (generation !== this.generation) throw new Error("Connection cancelled");
       startKeepAlive();
       // A challenge establishes liveness; status.json alone cannot do so.
@@ -94,16 +86,7 @@ export class MohoClient {
 
   private async release(session: string): Promise<void> {
       stopKeepAlive();
-      let owner;
-      try { owner = JSON.parse(await fs.promises.readFile(this.file("bridge-owner.json"), "utf8")); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
-      if (owner.session !== session) return;
-      for (const name of ["request.json", "request.json.tmp", "response.json"]) {
-        await fs.promises.unlink(this.file(name)).catch(error => {
-          if (error.code !== "ENOENT") throw error;
-        });
-      }
-      await fs.promises.unlink(this.file("bridge-owner.json"));
+      await new Ownership(this.ipcDir).release(session);
   }
 
   async sendRequest(method: string, params: Record<string, unknown> = {}, options?: { timeout?: number }): Promise<unknown> {

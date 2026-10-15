@@ -21,6 +21,9 @@ echo Copying core modules...
 copy /Y "%SRC%\moho_mcp\server.lua" "%DEST%\moho_mcp\server.lua"
 copy /Y "%SRC%\moho_mcp\protocol.lua" "%DEST%\moho_mcp\protocol.lua"
 copy /Y "%SRC%\moho_mcp\validator.lua" "%DEST%\moho_mcp\validator.lua"
+copy /Y "%SRC%\moho_mcp\safe_write.lua" "%DEST%\moho_mcp\safe_write.lua"
+copy /Y "%SRC%\moho_mcp\iterative_write.lua" "%DEST%\moho_mcp\iterative_write.lua"
+copy /Y "%SRC%\moho_mcp\coordinated_write.lua" "%DEST%\moho_mcp\coordinated_write.lua"
 
 echo Copying tool handlers...
 copy /Y "%SRC%\moho_mcp\tools\document.lua" "%DEST%\moho_mcp\tools\document.lua"
