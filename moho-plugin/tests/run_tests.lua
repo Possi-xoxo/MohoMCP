@@ -148,6 +148,7 @@ section("first-write safety regression tests")
 dofile(this_dir .. "test_safe_write.lua")
 dofile(this_dir .. "test_iterative_write.lua")
 dofile(this_dir .. "test_coordinated_write.lua")
+dofile(this_dir .. "test_focus_polling.lua")
 section("animation.lua regression tests")
 dofile(this_dir .. "test_animation.lua")
 

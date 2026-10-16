@@ -9,6 +9,21 @@ local cached = nil
 local lastError = nil
 local MAX_BYTES = 1024 * 1024
 local SEP = package.config:sub(1, 1)
+local lastPollTrace=0
+local function trace(event,request,detail)
+    pcall(function()
+        local filename=ipcDir..'lua-trace.jsonl'
+        local check=io.open(filename,'rb')
+        if check then
+            local size=check:seek('end');check:close()
+            if size and size>=MAX_BYTES then os.remove(filename..'.previous');os.rename(filename,filename..'.previous') end
+        end
+        local f=io.open(filename,'ab');if not f then return end
+        f:write(json.encode({timeMs=os.time()*1000,cpuSeconds=os.clock(),source='lua',event=event,
+            serverId=serverId,id=request and request.id,session=request and request.session,
+            method=request and request.method,detail=detail})..'\n');f:close()
+    end)
+end
 
 function server.init(deps)
     protocol, validator, json = deps.protocol, deps.validator, deps.json
@@ -100,7 +115,8 @@ function server.stop()
     cached = nil
 end
 
-local function reply(request, result, code, message)
+local function reply(request, result, code, message, fallbackOnly)
+    if code and not fallbackOnly then trace('rejected_or_failed',request,{code=code,message=message}) end
     local value = {jsonrpc = "2.0", ipcVersion = 2, serverId = serverId,
         session = request and request.session or json.null,
         id = request and request.id or json.null}
@@ -135,15 +151,18 @@ local function process(raw, moho)
     if not valid then return reply(request, nil, -32602, validationError) end
     local handler = handlers[request.method]
     if not handler then return reply(request, nil, -32601, "No handler registered") end
+    trace('execution_started',request)
     local ok, result, handlerError = pcall(handler, moho, params)
     if not ok then return reply(request, nil, -32603, tostring(result)) end
     if result == nil and handlerError then return reply(request, nil, -32603, tostring(handlerError)) end
+    trace('execution_completed',request)
     return reply(request, result)
 end
 
 function server.poll(moho)
     if not running or polling then return end
     polling = true
+    if os.time()>lastPollTrace then trace('poll_callback');lastPollTrace=os.time() end
     local ok, err = pcall(function()
         local status = decode(readFile("status.json"))
         if not status or status.serverId ~= serverId then
@@ -156,17 +175,19 @@ function server.poll(moho)
             return
         end
         if not cached or cached.raw ~= raw then
+            trace('discovered',decode(raw))
             -- Set a fallback BEFORE executing: even serialization failure must
             -- not cause a mutation to run twice in this server instance.
-            cached = {raw = raw, response = reply(decode(raw), nil, -32603, "Handler/serialization failed; outcome unknown"), delivered = false}
+            cached = {raw = raw, response = reply(decode(raw), nil, -32603, "Handler/serialization failed; outcome unknown", true), delivered = false}
             cached.response = process(raw, moho)
         end
         if cached.delivered then return end
         -- Client may have timed out or disconnected during a slow handler.
         -- Do not publish a stale completion over a newer request.
-        if readFile("request.json") ~= raw then return end
+        if readFile("request.json") ~= raw then trace('completion_abandoned',decode(raw));return end
         local written, writeErr = writeFile("response.json", cached.response)
-        if not written then error("Response write failed (retained for retry, handler will not repeat): " .. tostring(writeErr)) end
+        if not written then trace('response_write_failed',decode(raw),tostring(writeErr));error("Response write failed (retained for retry, handler will not repeat): " .. tostring(writeErr)) end
+        trace('response_written',decode(raw))
         cached.delivered = true
         -- Node removes its own request after consuming the response. Lua must
         -- not delete it after publishing: Node could already post the next one.

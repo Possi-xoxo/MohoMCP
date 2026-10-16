@@ -179,14 +179,7 @@ local function installDrawMeHooks()
 					if not pollOk then
 						print("[MohoMCP] Poll error (non-fatal): " .. tostring(pollErr))
 					end
-					-- Self-sustaining timer: call UpdateUI() throttled to ~4Hz
-					-- This triggers another DrawMe, keeping the poll loop alive
-					-- even when the user isn't interacting with the viewport
-					local now = os.clock()
-					if not MohoMCP_Server._lastPollTime or (now - MohoMCP_Server._lastPollTime) > 0.25 then
-						MohoMCP_Server._lastPollTime = now
-						pcall(function() moho:UpdateUI() end)
-					end
+					-- Do not rebuild UI during paint: text-entry controls must retain focus.
 				end
 				return original(self, moho, view)
 			end

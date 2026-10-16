@@ -9,14 +9,14 @@ local function fixture(body)
     os.execute=io.popen
     os.tmpname=function() state.unique=state.unique+1; return "unique"..state.unique end
     io.open=function(p,mode)
-        if mode=="wb" then
+        if mode=="wb" or mode=="ab" then
             if state.failWrite and p:find("response.json",1,true) then return nil,"disk full" end
             return {write=function(self,s)
                 if state.failDataWrite and p:find('response.json',1,true) then return nil,'write failed' end
-                files[p]=s; return self
+                files[p]=(mode=='ab' and (files[p] or '') or '')..s; return self
             end,close=function() return true end}
         end
-        if files[p] then return {read=function(_,limit) return files[p]:sub(1,limit) end,close=function() return true end} end
+        if files[p] then return {read=function(_,limit) return files[p]:sub(1,limit) end,seek=function()return #files[p]end,close=function() return true end} end
         return nil,"missing"
     end
     os.remove=function(p) files[p]=nil; return true end
@@ -178,5 +178,42 @@ test('poll: oversized malformed file does not prevent next valid mailbox request
     fixture(function(s,files,_,dir,request,response)
         files[dir..'request.json']=string.rep('x',1024*1024+1);s.poll({});assert_true(s.getInfo().lastError)
         request(2);s.poll({});assert_eq(response().id,2)
+    end)
+end)
+
+test('trace: idle mailbox is not executed until a callback and lifecycle is ordered',function()
+    fixture(function(s,files,state,dir,request,response)
+        request('idle');assert_eq(state.calls,0);assert_eq(files[dir..'lua-trace.jsonl'],nil)
+        s.poll({});local log=files[dir..'lua-trace.jsonl'];assert_eq(state.calls,1)
+        local a=assert(log:find('discovered',1,true));local b=assert(log:find('execution_started',1,true))
+        local c=assert(log:find('execution_completed',1,true));local d=assert(log:find('response_written',1,true))
+        assert_eq(log:find('rejected_or_failed',1,true),nil)
+        assert_true(a<b and b<c and c<d);assert_eq(response().id,'idle')
+    end)
+end)
+test('trace: failed response write is distinguishable and retries do not execute twice',function()
+    fixture(function(s,files,state,dir,request,response)
+        state.failWrite=true;request('write');s.poll({});assert_true(files[dir..'lua-trace.jsonl']:find('response_write_failed',1,true))
+        state.failWrite=false;s.poll({});assert_eq(state.calls,1);assert_eq(response().id,'write')
+    end)
+end)
+test('trace: expiration before discovery rejects execution',function()
+    fixture(function(s,files,state,dir,request,response)
+        request('late',{expiresAt=0});s.poll({});assert_eq(state.calls,0);assert_true(response().error)
+        local log=files[dir..'lua-trace.jsonl'];assert_true(log:find('rejected_or_failed',1,true));assert_eq(log:find('execution_started',1,true),nil)
+    end)
+end)
+test('trace: slow handler losing mailbox never publishes over newer work',function()
+    fixture(function(s,files,state,dir,request,response)
+        s.registerHandler('document.getInfo',function()state.calls=state.calls+1;files[dir..'request.json']=nil;return {done=true}end)
+        request('slow');s.poll({});assert_eq(state.calls,1);assert_eq(files[dir..'response.json'],nil)
+        assert_true(files[dir..'lua-trace.jsonl']:find('completion_abandoned',1,true))
+    end)
+end)
+test('trace: alternating read and write handlers use identical discovery path',function()
+    fixture(function(s,files,state,dir,request,response)
+        local writes=0;s.registerHandler('bone.setTransform',function()writes=writes+1;return {done=true}end)
+        for i=1,20 do request(i,i%2==0 and {method='bone.setTransform',params={layerId=1,boneId=0,frame=1,angle=0}} or nil);s.poll({});assert_eq(response().id,i) end
+        assert_eq(writes,10);assert_eq(state.calls,10)
     end)
 end)

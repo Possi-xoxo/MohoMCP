@@ -25,7 +25,13 @@ function status() { fs.writeFileSync(file("status.json"), JSON.stringify({runnin
 function client() { const c = new MohoClient(); clients.push(c); return c; }
 function poll() {
   if (!fs.existsSync(file("request.json"))) return;
-  const r = JSON.parse(fs.readFileSync(file("request.json"), "utf8")) as Request;
+  let r: Request;
+  try { r = JSON.parse(fs.readFileSync(file("request.json"), "utf8")) as Request; }
+  catch (error) {
+    // Windows may observe unlink between exists/read, or a transient sharing violation.
+    if (["ENOENT", "EPERM", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) return;
+    throw error;
+  }
   if (requests.some(p => p.id === r.id)) return;
   requests.push(r);
   const value = r.method === "ipc.ping" ? {result:{alive:true}} : transform(r);

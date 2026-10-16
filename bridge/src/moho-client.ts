@@ -6,6 +6,7 @@ import { config } from "./config.js";
 import { Ownership } from "./ownership.js";
 import { parseResponse } from "./protocol.js";
 import { startKeepAlive, stopKeepAlive } from "./keep-alive.js";
+import { ipcTrace } from "./ipc-trace.js";
 
 export class MohoClient {
   private session: string | null = null;
@@ -56,7 +57,7 @@ export class MohoClient {
     this.serverId = status.serverId;
     try {
       if (generation !== this.generation) throw new Error("Connection cancelled");
-      startKeepAlive();
+      startKeepAlive(this.ipcDir, session, this.serverId);
       // A challenge establishes liveness; status.json alone cannot do so.
       await this.enqueue("ipc.ping", {}, config.moho.requestTimeout, session);
       if (this.session !== session) throw new Error("Connection cancelled");
@@ -103,6 +104,7 @@ export class MohoClient {
   private async exchange(method: string, params: Record<string, unknown>, timeout: number, session: string): Promise<unknown> {
     const id = randomUUID();
     const deadline = Date.now() + timeout;
+    const trace=(event:string,extra:Record<string,unknown>={})=>ipcTrace(this.ipcDir,event,{id,method,session,serverId:this.serverId,...extra});
     const check = async () => {
       if (this.session !== session) throw new Error("IPC request cancelled by disconnect");
       let status;
@@ -122,6 +124,7 @@ export class MohoClient {
     const request = { jsonrpc: "2.0", ipcVersion: 2, serverId: this.serverId, session, id, method, params, expiresAt: deadline };
     await fs.promises.writeFile(this.file("request.json.tmp"), JSON.stringify(request));
     await fs.promises.rename(this.file("request.json.tmp"), this.file("request.json"));
+    trace('published',{deadline});
     let validResponse = false;
     try {
       while (true) {
@@ -132,6 +135,7 @@ export class MohoClient {
         if (raw !== undefined) {
           const envelope = JSON.parse(raw);
           if (envelope.session !== session || envelope.serverId !== this.serverId || envelope.id !== id || envelope.ipcVersion !== 2) {
+            trace('response_rejected');
             throw new Error("Mismatched IPC response ID, session, or server instance; response rejected");
           }
           const response = parseResponse(raw);
@@ -141,16 +145,21 @@ export class MohoClient {
             throw new Error("Invalid IPC response result/error envelope");
           }
           validResponse = true;
+          trace('response_received',{errorCode:response.error?.code});
           if (response.error) throw new Error(`MOHO error [${response.error.code}]: ${response.error.message}`);
           return response.result;
         }
-        if (Date.now() >= deadline) throw new Error(`Request ${method} timed out after ${timeout}ms at ${this.ipcDir}. Server status may be stale or polling stopped. Outcome unknown; do not retry writes automatically.`);
+        if (Date.now() >= deadline) { trace('timeout'); throw new Error(`Request ${method} timed out after ${timeout}ms at ${this.ipcDir}. Server status may be stale or polling stopped. Outcome unknown; do not retry writes automatically.`); }
         await new Promise(resolve => setTimeout(resolve, config.moho.pollInterval));
       }
+    } catch(error) {
+      trace('exchange_failed',{message:String(error).slice(0,400)});
+      throw error;
     } finally {
       if (!validResponse) this.ready = false;
       await fs.promises.unlink(this.file("request.json")).catch(() => {});
       await fs.promises.unlink(this.file("response.json")).catch(() => {});
+      trace('cleanup',{validResponse});
     }
   }
 }

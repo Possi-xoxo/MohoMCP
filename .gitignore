@@ -40,3 +40,13 @@ npm-debug.log*
 
 # Internal / private documents
 *.docx
+
+# Private runtime and generated local animation artifacts
+/outputs/
+/moho-runtime/
+write-approval.json
+bridge-owner.json
+owner-session-*.json
+*-trace.jsonl*
+*.moho
+*.moho.bak

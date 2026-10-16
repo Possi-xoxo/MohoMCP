@@ -151,3 +151,22 @@ See [implementation-pass-5.md](implementation-pass-5.md) for exact single-edit a
 ## Pass 6 coordinated edits
 
 See [implementation-pass-6.md](implementation-pass-6.md). The narrow two-bone transaction requires matching `moho_mcp/coordinated_write.lua` and `moho_mcp/tools/bone.lua`, installed with approval and backups followed by one normal Moho restart. Keep the existing tool filter; unrestricted batch is unnecessary. Version-3 approval files are private ephemeral runtime files and must never be committed. Live write approval is separate from plugin installation approval.
+
+## Pass 7 connected humanoid rigs
+
+[Pass 7 guide](implementation-pass-7.md) describes 2–12 connected bones and bounded version-4 approvals. Update `moho_mcp/coordinated_write.lua` only after approval, with a backup and one normal Moho restart. The Pass 6 bone handler already provides the inspection/dispatch integration. Version-3 two-bone approvals remain compatible. Controller/target/dynamics/IK checks are stricter for version 4; unknown APIs fail closed. Keep the existing eleven-tool filter and private IPC directory. Never commit local approvals or save projects automatically.
+
+## Current toolkit through Pass 8.3
+
+See [Pass 8.3 results](implementation-pass-8-3.md) for the current tested state.
+Pass 8.1 expands the Pass 7 hierarchy limit to 32 bones without increasing the
+72-operation transaction bound. Install matching Lua modules only after approval
+and backups; restart Moho once for cached Lua changes. The offline pose planner
+and background-refresh fix require no new MCP tools. Keep private approvals,
+traces, local pose bindings and launcher paths out of version control.
+
+The current helper refreshes only for a valid owned pending request to one visible,
+nonminimized background Moho process. Input in other applications no longer blocks
+that background refresh. Foreground Moho still suppresses artificial refresh;
+there is no synthetic mouse input or focus activation. A bridge-only update takes
+effect after a normal Codex/bridge restart while Moho can remain open.

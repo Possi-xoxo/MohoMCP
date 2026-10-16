@@ -38,7 +38,7 @@ async function main(): Promise<void> {
         "MohoMCP communicates with Moho using private file IPC. Inspect the active document and rig before writing.",
         "Respect the enabled tool filter. Do not enable unrestricted batch, screenshot, or input tools for convenience.",
         "bone_setTransform is angle-only in the validated workflow. A local session-bound approval is required.",
-        "Version 2 approvals allow one inspected edit; version 3 explicitly approves a bounded same-layer two-bone transaction triggered by its first operation. Never infer transaction scope from the anchor call alone.",
+        "Version 2 approvals allow one inspected edit; versions 3/4 explicitly approve a bounded same-layer coordinated transaction (version 4: 2–32 connected bones) triggered by its first operation. Never infer transaction scope from the anchor call alone.",
         "Read back changes. Do not retry a timed-out mutation without inspecting the document. No automatic save.",
       ].join("\n"),
     },

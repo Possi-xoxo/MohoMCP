@@ -278,7 +278,7 @@ export function registerTools(server: McpServer, client: MohoClient): void {
   // 11. bone.setTransform — Pose a bone at a frame
   server.tool(
     "bone_setTransform",
-    "Apply an approved bone-angle edit. Position/scale are currently rejected by the Lua safety gate. A version-3 local approval can authorize a bounded two-bone transaction; this call must match its first operation. Inspect and approve the complete plan before calling.",
+    "Apply an approved bone-angle edit. Position/scale are currently rejected by the Lua safety gate. A version-3/4 local approval can authorize a bounded coordinated transaction (version 4: up to 32 connected bones); this call must match its first operation. Inspect and approve the complete plan before calling.",
     {
       layerId: z.number().describe("The numeric ID of the bone layer"),
       boneId: z.number().describe("The 0-based bone index within the skeleton"),

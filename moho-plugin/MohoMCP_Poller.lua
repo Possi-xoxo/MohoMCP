@@ -61,12 +61,7 @@ function MohoMCP_Poller:DrawMe(moho, view)
 		if not pollOk then
 			print("[MohoMCP] Poll error: " .. tostring(pollErr))
 		end
-		-- Self-sustaining timer via UpdateUI (throttled to ~4Hz)
-		local now = os.clock()
-		if not MohoMCP_Server._lastPollTime or (now - MohoMCP_Server._lastPollTime) > 0.25 then
-			MohoMCP_Server._lastPollTime = now
-			pcall(function() moho:UpdateUI() end)
-		end
+		-- No recurring UpdateUI: natural paint or demand-driven helper wakes polling.
 	end
 end
 
