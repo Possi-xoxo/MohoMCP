@@ -150,6 +150,7 @@ function layer.getProperties(moho, params)
     if fOk then frame = f end
 
     result.transform = readTransform(lyr, frame)
+    result.attachment = require('moho_mcp.attachment_inspection').read(moho, lyr)
 
     -- Extras depending on type
     if lyr:IsGroupType() then

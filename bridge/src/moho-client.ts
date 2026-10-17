@@ -7,6 +7,7 @@ import { Ownership } from "./ownership.js";
 import { parseResponse } from "./protocol.js";
 import { startKeepAlive, stopKeepAlive } from "./keep-alive.js";
 import { ipcTrace } from "./ipc-trace.js";
+import { TOOLKIT_VERSION, assertWriteCompatibility } from './compatibility.js';
 
 export class MohoClient {
   private session: string | null = null;
@@ -115,13 +116,14 @@ export class MohoClient {
         throw new Error("MOHO server restarted or stopped. Disconnect and reconnect; mutation outcome may be unknown.");
       }
       let owner;
+      assertWriteCompatibility(method, status.toolkitVersion);
       try { owner = JSON.parse(await fs.promises.readFile(this.file("bridge-owner.json"), "utf8")); }
       catch { this.ready = false; throw new Error("IPC ownership missing or invalid; disconnect and recover explicitly"); }
       if (owner.session !== session) { this.ready = false; throw new Error("IPC ownership changed"); }
     };
     await check();
     await fs.promises.unlink(this.file("response.json")).catch(error => { if (error.code !== "ENOENT") throw error; });
-    const request = { jsonrpc: "2.0", ipcVersion: 2, serverId: this.serverId, session, id, method, params, expiresAt: deadline };
+    const request = { jsonrpc: "2.0", ipcVersion: 2, toolkitVersion: TOOLKIT_VERSION, serverId: this.serverId, session, id, method, params, expiresAt: deadline };
     await fs.promises.writeFile(this.file("request.json.tmp"), JSON.stringify(request));
     await fs.promises.rename(this.file("request.json.tmp"), this.file("request.json"));
     trace('published',{deadline});

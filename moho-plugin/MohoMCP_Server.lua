@@ -107,6 +107,7 @@ local function loadModules(baseDir)
 
 	-- Load tool handlers
 	local toolModules = {
+		{ name = "moho_mcp.attachment_binding", methods = { "attachment.inspect", "attachment.apply" } },
 		{ name = "moho_mcp.tools.document",  methods = { "document.getInfo", "document.getLayers", "document.setFrame", "document.screenshot" } },
 		{ name = "moho_mcp.tools.layer",     methods = { "layer.getProperties", "layer.getChildren", "layer.getBones", "layer.setTransform", "layer.setVisibility", "layer.setOpacity", "layer.setName", "layer.selectLayer" } },
 		{ name = "moho_mcp.tools.bone",      methods = { "bone.getProperties", "bone.setTransform", "bone.selectBone" } },

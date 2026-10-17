@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { MohoClient } from "../moho-client.js";
+import { TOOLKIT_VERSION } from '../compatibility.js';
 vi.mock("../keep-alive.js", () => ({ startKeepAlive: vi.fn(), stopKeepAlive: vi.fn() }));
 vi.mock("../ownership.js", async importOriginal => {
   const actual = await importOriginal<typeof import("../ownership.js")>();
@@ -21,7 +22,7 @@ let epoch: string;
 let requests: Request[];
 let transform: (r: Request) => Record<string, unknown> | null;
 const file = (name: string) => path.join(dir, name);
-function status() { fs.writeFileSync(file("status.json"), JSON.stringify({running:true, ipcVersion:2, serverId:epoch})); }
+function status() { fs.writeFileSync(file("status.json"), JSON.stringify({running:true, ipcVersion:2, toolkitVersion:TOOLKIT_VERSION, serverId:epoch})); }
 function client() { const c = new MohoClient(); clients.push(c); return c; }
 function poll() {
   if (!fs.existsSync(file("request.json"))) return;
@@ -52,6 +53,13 @@ afterEach(async () => {
 });
 
 describe("IPC v2 MohoClient", () => {
+  it('blocks mismatched toolkit writes before mailbox publication',async()=>{
+    const c=client();await c.connect();
+    fs.writeFileSync(file('status.json'),JSON.stringify({running:true,ipcVersion:2,serverId:epoch,toolkitVersion:'old'}));
+    await expect(c.sendRequest('attachment.apply',{token:'fixture'})).rejects.toThrow('Toolkit mismatch');
+    expect(requests.some(r=>r.method==='attachment.apply')).toBe(false);
+    expect(await c.sendRequest('document.getInfo',{diagnostic:true})).toEqual({diagnostic:true});
+  });
   it("requires a live challenge, connects idempotently and disconnects", async () => {
     const c=client(); expect(c.isConnected()).toBe(false);
     await Promise.all([c.connect(),c.connect()]);

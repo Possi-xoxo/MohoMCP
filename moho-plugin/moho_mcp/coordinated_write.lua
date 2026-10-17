@@ -205,4 +205,6 @@ function tx.tryApply(m,p,l,s)
     local result,err=tx.apply(m,p,l,s,plan,owner,info)
     return true,result,err
 end
+-- Read-only snapshot for the separate guarded artwork transaction.
+tx.bindingSnapshot=inspect
 return tx

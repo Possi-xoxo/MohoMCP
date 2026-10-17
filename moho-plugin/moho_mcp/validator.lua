@@ -6,6 +6,8 @@ local validator = {}
 
 -- Allow-list of tool method names
 local allowedMethods = {
+    ["attachment.inspect"] = true,
+    ["attachment.apply"] = true,
     -- Phase 1: Read-only tools
     ["document.getInfo"]       = true,
     ["document.getLayers"]     = true,
@@ -38,6 +40,8 @@ local allowedMethods = {
 -- Parameter schemas for each method.
 -- Each entry is a list of { name, type } tables describing required parameters.
 local paramSchemas = {
+    ["attachment.inspect"] = {{name="rigLayerName",type="string"},{name="mappings",type="table"}},
+    ["attachment.apply"] = {{name="token",type="string"}},
     ["document.getInfo"]       = {},
     ["document.getLayers"]     = {},
     ["layer.getProperties"]    = {

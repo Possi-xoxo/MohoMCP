@@ -121,8 +121,15 @@ function document.getInfo(moho, params)
     local eOk, ef = pcall(function() return doc:EndFrame() end)
     result.endFrame = eOk and ef or 0
 
-    local cOk, cf = pcall(function() return doc:CurrentFrame() end)
-    result.currentFrame = cOk and cf or 0
+    -- ScriptInterface.frame is used by Moho's shipped tools. Never report a
+    -- fabricated setup-frame zero when the frame API is unavailable.
+    local cf = moho.frame
+    if type(cf)=='number' and cf==cf and math.abs(cf)<math.huge and cf%1==0 then
+        result.currentFrame = cf
+    else
+        result.currentFrame = json.null
+        result.currentFrameError = 'ScriptInterface.frame unavailable'
+    end
 
     -- Duration in seconds
     if result.fps > 0 then

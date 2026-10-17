@@ -50,3 +50,8 @@ owner-session-*.json
 *-trace.jsonl*
 *.moho
 *.moho.bak
+binding-approval.json
+
+!Deploy-MohoMCP.ps1
+/release-package/
+/deployment.local.json

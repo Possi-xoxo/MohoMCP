@@ -280,3 +280,7 @@ All 26 tools work identically on both platforms. The bridge auto-detects the OS 
 ## License
 
 MIT — see [LICENSE](LICENSE) for details.
+
+## Managed Windows deployment
+
+See [Unified deployment](docs/unified-deployment.md) for complete-package installation, updates, verification and rollback. Legacy installers do not provide the coordinated version and backup guarantees.

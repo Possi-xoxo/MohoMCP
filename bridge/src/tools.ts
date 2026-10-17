@@ -69,6 +69,19 @@ async function ensureConnected(client: MohoClient): Promise<void> {
  * Register all MOHO tools on the given MCP server instance.
  */
 export function registerTools(server: McpServer, client: MohoClient): void {
+  server.tool('attachment_inspect', 'Read-only inspection of 1–3 named direct-child artwork mappings. Expected binding -1 means no explicit binding; replacement requires its exact prior bone ID.', {
+    rigLayerName: z.string().min(1).max(256),
+    mappings: z.array(z.object({layerName:z.string().min(1).max(256),boneName:z.string().min(1).max(256),expectedBinding:z.number().int().min(-1).max(31)}).strict()).min(1).max(3),
+  }, async params => {
+    try { await ensureConnected(client); return successContent(await client.sendRequest('attachment.inspect',params)); }
+    catch(err) { return errorContent(err); }
+  });
+  server.tool('attachment_apply', 'Apply only the exact freshly inspected mappings authorized by private session-bound binding-approval.json. No transform edits or arbitrary commands. Read back and never blindly retry.', {
+    token:z.string().min(1).max(512),
+  }, async params => {
+    try { await ensureConnected(client); return successContent(await client.sendRequest('attachment.apply',params)); }
+    catch(err) { return errorContent(err); }
+  });
   // 1. document.getInfo — No input params
   server.tool(
     "document_getInfo",

@@ -1,0 +1,29 @@
+import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
+import {LUA_MODULES,sha,validatePackage,preview,deploy,verify,rollback,uninstall} from './deployment.mjs';
+const required=['scripts/Tool/MohoMCP_Poller.lua','scripts/Menu/MohoMCP/MohoMCP_Server.lua','scripts/Menu/MohoMCP/json.lua','scripts/Menu/MohoMCP/moho_mcp/tools/batch.lua','scripts/Menu/MohoMCP/moho_mcp/attachment_binding.lua','scripts/Menu/MohoMCP/moho_mcp/version.lua','bridge/dist/index.js','bridge/dist/compatibility.js','bridge/package-lock.json'];
+for(const module of LUA_MODULES){const p='scripts/Menu/MohoMCP/moho_mcp/'+module+'.lua';if(!required.includes(p))required.push(p);}
+function fixture(fn){const root=fs.mkdtempSync(path.join(os.tmpdir(),'moho-deploy-'));try{
+ const pkg=path.join(root,'package');fs.mkdirSync(pkg);const c={scriptsRoot:path.join(root,'scripts'),bridgeRoot:path.join(root,'bridge'),stateRoot:path.join(root,'state')};fs.mkdirSync(c.scriptsRoot);
+ const m={format:1,version:{release:'0.9.1',lua:'0.9.1',bridge:'0.9.1',ipc:2,supportedMoho:'14.5'},files:[]};
+ for(const rel of required){const p=path.join(pkg,rel);fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,rel.endsWith('version.lua')?"return {release='0.9.1'}":rel.endsWith('compatibility.js')?"export const VERSION='0.9.1';":'fixture');m.files.push({source:rel,area:rel.split('/')[0],target:rel.split('/').slice(1).join('/'),sha256:sha(p)});}
+ const save=()=>fs.writeFileSync(path.join(pkg,'manifest.json'),JSON.stringify(m));save();fn({root,pkg,c,m,save});
+ }finally{fs.rmSync(root,{recursive:true,force:true});}}
+const t=(name,fn)=>test(name,()=>fixture(fn));
+t('complete manifest and preview do not install',f=>{assert.equal(validatePackage(f.pkg).files.length,required.length);assert.equal(preview(f.pkg,f.c).files.length,required.length);assert(!fs.existsSync(f.c.stateRoot));});
+t('missing Lua fails',f=>{fs.unlinkSync(path.join(f.pkg,required[3]));assert.throws(()=>deploy(f.pkg,f.c),/Missing/);});
+t('corrupted Lua fails',f=>{fs.appendFileSync(path.join(f.pkg,required[3]),'bad');assert.throws(()=>validatePackage(f.pkg),/corrupted/);});
+t('omitted mandatory Lua fails',f=>{f.m.files.splice(3,1);f.save();assert.throws(()=>validatePackage(f.pkg),/Incomplete/);});
+t('version mismatch fails',f=>{f.m.version.lua='old';f.save();assert.throws(()=>validatePackage(f.pkg),/metadata/);});
+t('compiled version mismatch fails',f=>{const row=f.m.files[5];fs.writeFileSync(path.join(f.pkg,row.source),"return {release='old'}");row.sha256=sha(path.join(f.pkg,row.source));f.save();assert.throws(()=>validatePackage(f.pkg),/version/);});
+t('failed install rolls back all copied files',f=>{assert.throws(()=>deploy(f.pkg,f.c,{fault:n=>{if(n===3)throw Error('injected');}}),/injected/);assert(!fs.existsSync(path.join(f.c.scriptsRoot,'Tool/MohoMCP_Poller.lua')));assert(!fs.existsSync(path.join(f.c.stateRoot,'installed.json')));});
+t('migration backups and unrelated preservation',f=>{const dir=path.join(f.c.scriptsRoot,'Menu/MohoMCP');fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'MohoMCP_Server.lua'),'old');fs.writeFileSync(path.join(dir,'personal.lua'),'custom');const r=deploy(f.pkg,f.c);assert.equal(verify(f.c).verified,true);rollback(f.c,r.backup);assert.equal(fs.readFileSync(path.join(dir,'MohoMCP_Server.lua'),'utf8'),'old');assert.equal(fs.readFileSync(path.join(dir,'personal.lua'),'utf8'),'custom');});
+t('backup corruption rejects rollback before changes',f=>{deploy(f.pkg,f.c);const r=deploy(f.pkg,f.c);const b=JSON.parse(fs.readFileSync(path.join(r.backup,'backup.json')));fs.appendFileSync(path.join(r.backup,b.files[0].backup),'bad');assert.throws(()=>rollback(f.c,r.backup),/integrity/);});
+t('repeated install is verified and reversible',f=>{deploy(f.pkg,f.c);const r=deploy(f.pkg,f.c);assert.equal(verify(f.c).files,required.length);rollback(f.c,r.backup);assert.equal(verify(f.c).verified,true);});
+t('uninstall removes only fresh owned files',f=>{fs.writeFileSync(path.join(f.c.scriptsRoot,'personal.lua'),'custom');deploy(f.pkg,f.c);uninstall(f.c);assert.equal(fs.readFileSync(path.join(f.c.scriptsRoot,'personal.lua'),'utf8'),'custom');assert(fs.existsSync(path.join(f.c.stateRoot,'backups')));});
+t('modified installed files prevent destructive uninstall',f=>{deploy(f.pkg,f.c);fs.appendFileSync(path.join(f.c.bridgeRoot,'dist/index.js'),'edit');assert.throws(()=>uninstall(f.c),/hash mismatch/);});
+t('unsafe manifest destination rejected',f=>{f.m.files[0].target='../project.moho';f.save();assert.throws(()=>validatePackage(f.pkg));});
+t('interrupted deployment blocks launch verification',f=>{deploy(f.pkg,f.c);fs.writeFileSync(path.join(f.c.stateRoot,'journal.json'),'{}');assert.throws(()=>verify(f.c),/Incomplete/);});
+t('overlapping roots refused',f=>{f.c.bridgeRoot=path.join(f.c.scriptsRoot,'bridge');assert.throws(()=>preview(f.pkg,f.c),/overlap/);});
+t('Lua dependency omitted from manifest is rejected',f=>{const row=f.m.files[1];fs.writeFileSync(path.join(f.pkg,row.source),"require('moho_mcp.missing')");row.sha256=sha(path.join(f.pkg,row.source));f.save();assert.throws(()=>validatePackage(f.pkg),/dependency/);});
+t('journal recovery restores a recognized partial release',f=>{const r=deploy(f.pkg,f.c);fs.writeFileSync(path.join(f.c.stateRoot,'journal.json'),JSON.stringify({backup:r.backup}));rollback(f.c,r.backup);assert(!fs.existsSync(path.join(f.c.bridgeRoot,'dist/index.js')));});
+t('recovery refuses unrecognized manual modifications',f=>{const r=deploy(f.pkg,f.c);fs.writeFileSync(path.join(f.c.stateRoot,'journal.json'),JSON.stringify({backup:r.backup}));fs.appendFileSync(path.join(f.c.bridgeRoot,'dist/index.js'),'manual');assert.throws(()=>rollback(f.c,r.backup),/unrecognized/);});

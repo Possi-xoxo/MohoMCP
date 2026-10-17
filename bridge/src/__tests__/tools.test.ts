@@ -62,9 +62,9 @@ describe("registerTools", () => {
     ).not.toThrow();
   });
 
-  it("registers exactly 26 tools", () => {
+  it("preserves the original 26 tools and adds two guarded attachment tools", () => {
     registerTools(mockServer as unknown as Parameters<typeof registerTools>[0], client);
-    expect(mockServer.tools).toHaveLength(26);
+    expect(mockServer.tools).toHaveLength(28);
   });
 
   it("registers all expected tool names", () => {
@@ -127,6 +127,16 @@ describe("registerTools", () => {
       if (!tool) throw new Error(`Tool ${name} not found`);
       return tool;
     }
+
+    it('forwards attachment inspection without mutation dispatch', async () => {
+      const params={rigLayerName:'Character Rig',mappings:[{layerName:'Sweater',boneName:'Torso',expectedBinding:-1}]};
+      await findTool('attachment_inspect').handler(params);
+      expect(client.sendRequest).toHaveBeenCalledWith('attachment.inspect',params);
+    });
+    it('forwards only an inspection token for binding application', async () => {
+      await findTool('attachment_apply').handler({token:'fresh-token'});
+      expect(client.sendRequest).toHaveBeenCalledWith('attachment.apply',{token:'fresh-token'});
+    });
 
     it("document_getInfo handler returns success content on success", async () => {
       (client.sendRequest as ReturnType<typeof vi.fn>).mockResolvedValue({

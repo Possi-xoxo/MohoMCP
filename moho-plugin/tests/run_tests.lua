@@ -151,6 +151,8 @@ dofile(this_dir .. "test_coordinated_write.lua")
 dofile(this_dir .. "test_focus_polling.lua")
 section("animation.lua regression tests")
 dofile(this_dir .. "test_animation.lua")
+dofile(this_dir .. "test_attachment_inspection.lua")
+dofile(this_dir .. "test_attachment_binding.lua")
 
 -------------------------------------------------------------------------------
 -- Summary

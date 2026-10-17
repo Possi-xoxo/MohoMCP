@@ -32,7 +32,7 @@ local function fixture(body)
         local dir=server.getInfo().ipcDir
         files[dir..'bridge-owner.json']=json.encode({session='session-one'})
         local function request(id, extra)
-            local r={jsonrpc='2.0',ipcVersion=2,serverId=server.getInfo().serverId,
+            local r={jsonrpc='2.0',ipcVersion=2,toolkitVersion=require('moho_mcp.version').release,serverId=server.getInfo().serverId,
                 session='session-one',id=id,method='document.getInfo',params={},expiresAt=os.time()*1000+60000}
             for k,v in pairs(extra or {}) do r[k]=v end
             files[dir..'request.json']=json.encode(r)
@@ -216,4 +216,12 @@ test('trace: alternating read and write handlers use identical discovery path',f
         for i=1,20 do request(i,i%2==0 and {method='bone.setTransform',params={layerId=1,boneId=0,frame=1,angle=0}} or nil);s.poll({});assert_eq(response().id,i) end
         assert_eq(writes,10);assert_eq(state.calls,10)
     end)
+end)
+
+test('release mismatch rejects writes before dispatch but permits reads',function()
+ fixture(function(s,files,state,dir,request,response)
+  local writes=0;s.registerHandler('bone.setTransform',function()writes=writes+1;return {}end)
+  request('old-write',{method='bone.setTransform',toolkitVersion='old',params={layerId=0,boneId=0,frame=1,angle=0}});s.poll({});assert_eq(response().error.code,-32600);assert_eq(writes,0)
+  request('old-read',{toolkitVersion='old'});s.poll({});assert_eq(response().result.count,1)
+ end)
 end)

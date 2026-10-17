@@ -96,7 +96,7 @@ function server.start()
     serverId = unique:gsub("[^%w]", "") .. "-" .. tostring(os.time()) .. "-" .. tostring({}):gsub("[^%w]", "")
     local ok, writeErr = writeFile("status.json", json.encode({
         running = true, ipcVersion = 2, serverId = serverId, ipcDir = ipcDir,
-        version = "0.1.0", startedAt = os.time()
+        version = "0.1.0", toolkitVersion = require('moho_mcp.version').release, startedAt = os.time()
     }))
     if not ok then
         return false, "Cannot write IPC status at " .. ipcDir .. ": " .. tostring(writeErr)
@@ -144,6 +144,9 @@ local function process(raw, moho)
         return reply(request, nil, -32600, "Request expired or missing deadline")
     end
     if request.method == "ipc.ping" then return reply(request, {alive = true}) end
+    if not require('moho_mcp.version').compatible(request.method,request.toolkitVersion) then
+        return reply(request,nil,-32600,'Toolkit version mismatch; install matching bridge and Lua release before writes')
+    end
     if not validator.isAllowed(request.method) then return reply(request, nil, -32601, "Method not found") end
     local params = request.params or {}
     if type(params) ~= "table" then return reply(request, nil, -32602, "Params must be an object") end
